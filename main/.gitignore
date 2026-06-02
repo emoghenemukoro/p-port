@@ -1,0 +1,34 @@
+# Android Studio
+.idea/
+.gradle/
+.kotlin/
+
+# Nested IDE folders
+main/.idea/
+main/.gradle/
+main/.kotlin/
+
+backend/.idea/
+backend/.vscode/
+
+# Build outputs
+build/
+main/build/
+main/app/build/
+
+# Local config
+local.properties
+main/local.properties
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Mac
+.DS_Store
+
+# Supabase temp files
+backend/supabase/.temp/
