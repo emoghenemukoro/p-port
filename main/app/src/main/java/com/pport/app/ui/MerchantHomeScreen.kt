@@ -69,6 +69,9 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
     // Wallet balance
     var walletBalance by remember { mutableStateOf(0.0) }
 
+    // KYC status
+    var kycStatus by remember { mutableStateOf<String?>(null) }
+
     // Location dialog state
     var showLocationDialog by remember { mutableStateOf(false) }
     var customerLat by remember { mutableStateOf(0.0) }
@@ -114,7 +117,7 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
         try {
             val token = com.pport.app.auth.Session.accessToken ?: return
             val userId = com.pport.app.auth.Session.userId ?: return
-            val url = URL("${com.pport.app.config.AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$userId&select=balance&limit=1")
+            val url = URL("${com.pport.app.config.AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$userId&select=balance,kyc_status&limit=1")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("apikey", com.pport.app.config.AppConfig.SUPABASE_ANON_KEY)
@@ -123,11 +126,27 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
             val text = conn.inputStream.bufferedReader().readText()
             val arr = JSONArray(text)
             if (arr.length() > 0) {
-                walletBalance = arr.getJSONObject(0).optDouble("balance", 0.0)
+                val obj = arr.getJSONObject(0)
+                walletBalance = obj.optDouble("balance", 0.0)
+                kycStatus = obj.optString("kyc_status", null)
             }
         } catch (_: Exception) {
             // silently fail
         }
+    }
+
+    suspend fun fetchKYCStatusLocal(): String? {
+        val token = com.pport.app.auth.Session.accessToken ?: return null
+        val userId = com.pport.app.auth.Session.userId ?: return null
+        val url = URL("${com.pport.app.config.AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$userId&select=kyc_status&limit=1")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("apikey", com.pport.app.config.AppConfig.SUPABASE_ANON_KEY)
+            setRequestProperty("Authorization", "Bearer $token")
+        }
+        val text = conn.inputStream.bufferedReader().readText()
+        val arr = JSONArray(text)
+        return if (arr.length() > 0) arr.getJSONObject(0).optString("kyc_status", null) else null
     }
 
     LaunchedEffect(Unit) {
@@ -165,6 +184,14 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
     fun toggleOnline(online: Boolean) {
         scope.launch {
             try {
+                if (online) {
+                    // Check KYC status before allowing online
+                    val kyc = fetchKYCStatusLocal()
+                    if (kyc != "approved") {
+                        error = "Complete KYC verification before going online"
+                        return@launch
+                    }
+                }
                 MerchantApi.setOnlineStatus(online)
                 isOnline = online
                 if (!online) locationError = null
@@ -328,6 +355,17 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
 
+            // KYC Status
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("KYC Status: ${kycStatus ?: "Unknown"}")
+                if (kycStatus != "approved") {
+                    Text("⚠️ Not Verified", color = MaterialTheme.colorScheme.error)
+                } else {
+                    Text("✅ Verified", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Status: ${if (isOnline) "Online" else "Offline"}")
                 Switch(checked = isOnline, onCheckedChange = { toggleOnline(it) })
@@ -423,7 +461,6 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
 
                                 if (!tx.confirmedMerchant) {
                                     if (tx.requestType == "deposit") {
-                                        // Deposit: show Transfer to Customer button
                                         Button(onClick = {
                                             transferTransactionId = tx.id
                                             customerBankName = ""
@@ -431,7 +468,6 @@ fun MerchantHomeScreen(onLogout: () -> Unit) {
                                             showTransferDialog = true
                                         }) { Text("Transfer to Customer") }
                                     } else {
-                                        // Withdrawal: show Payment Received button
                                         Button(onClick = {
                                             scope.launch {
                                                 try {

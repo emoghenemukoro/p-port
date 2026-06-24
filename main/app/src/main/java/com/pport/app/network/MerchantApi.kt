@@ -137,4 +137,71 @@ object MerchantApi {
             error(err ?: "Profile update failed")
         }
     }
+    // Add these methods inside the MerchantApi object
+
+    suspend fun submitKYC(
+        fullName: String,
+        bvn: String,
+        nin: String,
+        bankName: String,
+        accountNumber: String
+    ) = withContext(Dispatchers.IO) {
+        val token = Session.accessToken ?: error("Missing token")
+        val userId = Session.userId ?: error("Missing user")
+
+        val url = URL("${AppConfig.SUPABASE_URL}/functions/v1/merchant-kyc")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/json")
+        }
+
+        val body = JSONObject().apply {
+            put("user_id", userId)
+            put("full_name", fullName)
+            put("bvn", bvn)
+            put("nin", nin)
+            put("bank_name", bankName)
+            put("account_number", accountNumber)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        if (conn.responseCode !in 200..299) {
+            val err = conn.errorStream?.bufferedReader()?.readText()
+            error(err ?: "KYC submission failed")
+        }
+    }
+
+    suspend fun linkPOS(
+        posType: String,
+        posSerial: String?
+    ) = withContext(Dispatchers.IO) {
+        val token = Session.accessToken ?: error("Missing token")
+        val userId = Session.userId ?: error("Missing user")
+
+        val url = URL("${AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$userId")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "PATCH"
+            doOutput = true
+            setRequestProperty("apikey", AppConfig.SUPABASE_ANON_KEY)
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Prefer", "return=minimal")
+        }
+
+        val body = JSONObject().apply {
+            put("pos_type", posType)
+            if (posSerial != null) put("assigned_pos_serial", posSerial)
+            put("kyc_status", "in_progress")
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        if (conn.responseCode !in 200..299) {
+            val err = conn.errorStream?.bufferedReader()?.readText()
+            error(err ?: "POS linking failed")
+        }
+    }
 }

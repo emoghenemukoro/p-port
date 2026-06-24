@@ -72,9 +72,9 @@ private fun AppRoot() {
                 Session.countryIso2 = profile.countryIso2
 
                 if (profile.role == "merchant") {
-                    // Check if POS machine is registered
-                    val posId = fetchPosMachineId()
-                    needsRegistration = posId.isNullOrBlank()
+                    // Check if KYC is verified (not just POS machine)
+                    val kycStatus = fetchKYCStatus()
+                    needsRegistration = kycStatus != "approved"
                     route = Route.MERCHANT
                 } else {
                     route = Route.CUSTOMER
@@ -132,8 +132,12 @@ private fun AppRoot() {
                         MerchantRegistrationScreen(
                             onComplete = {
                                 needsRegistration = false
-                                // Trigger re-fetch to update UI (just force a small state change)
-                                route = Route.MERCHANT
+                                // Re-check KYC status after registration
+                                scope.launch {
+                                    val kycStatus = fetchKYCStatus()
+                                    needsRegistration = kycStatus != "approved"
+                                    route = Route.MERCHANT
+                                }
                             }
                         )
                     } else {
@@ -190,11 +194,11 @@ private suspend fun fetchProfile(): Profile = withContext(Dispatchers.IO) {
     )
 }
 
-private suspend fun fetchPosMachineId(): String? = withContext(Dispatchers.IO) {
+private suspend fun fetchKYCStatus(): String? = withContext(Dispatchers.IO) {
     val token = Session.accessToken ?: return@withContext null
     val userId = Session.userId ?: return@withContext null
     val encoded = URLEncoder.encode(userId, "UTF-8")
-    val url = URL("${AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$encoded&select=pos_machine_id&limit=1")
+    val url = URL("${AppConfig.SUPABASE_URL}/rest/v1/profiles?id=eq.$encoded&select=kyc_status&limit=1")
     val conn = (url.openConnection() as HttpURLConnection).apply {
         requestMethod = "GET"
         setRequestProperty("apikey", AppConfig.SUPABASE_ANON_KEY)
@@ -202,5 +206,5 @@ private suspend fun fetchPosMachineId(): String? = withContext(Dispatchers.IO) {
     }
     val text = conn.inputStream.bufferedReader().readText()
     val arr = JSONArray(text)
-    if (arr.length() == 0) null else arr.getJSONObject(0).optString("pos_machine_id", null)
+    if (arr.length() == 0) null else arr.getJSONObject(0).optString("kyc_status", null)
 }

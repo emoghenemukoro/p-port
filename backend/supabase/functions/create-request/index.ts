@@ -2,8 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const supabase = createClient(
-  Deno.env.get("PROJECT_URL")!,
-  Deno.env.get("SERVICE_ROLE_KEY")!
+    Deno.env.get("PROJECT_URL")!,
+    Deno.env.get("SERVICE_ROLE_KEY")!
 );
 
 serve(async (req) => {
@@ -16,17 +16,17 @@ serve(async (req) => {
 
     // ✅ FIX: use 'open' (allowed by the table constraint)
     const { data: request, error } = await supabase
-      .from("requests")
-      .insert({
-        customer_id: user_id,
-        amount,
-        type,
-        location: `POINT(${lng} ${lat})`,
-        status: "open",                // ← was "searching", now "open"
-        expires_at: new Date(Date.now() + 2 * 60 * 1000)
-      })
-      .select()
-      .single();
+        .from("requests")
+        .insert({
+          customer_id: user_id,
+          amount,
+          type,
+          location: `POINT(${lng} ${lat})`,
+          status: "open",                // ← was "searching", now "open"
+          expires_at: new Date(Date.now() + 2 * 60 * 1000)
+        })
+        .select()
+        .single();
 
     if (error) throw error;
 
