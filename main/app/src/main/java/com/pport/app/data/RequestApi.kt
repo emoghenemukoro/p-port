@@ -20,9 +20,6 @@ data class Request(
 
 object RequestApi {
 
-    /**
-     * ✅ NEW (USE THIS) — goes through backend function
-     */
     suspend fun createRequestWithLocation(
         amount: Double,
         type: String,
@@ -63,9 +60,6 @@ object RequestApi {
         json.getString("id")
     }
 
-    /**
-     * Merchant: fetch open requests
-     */
     suspend fun fetchOpenRequests(): List<Request> = withContext(Dispatchers.IO) {
         val accessToken = Session.accessToken ?: error("Missing access token")
 
@@ -96,9 +90,6 @@ object RequestApi {
         }
     }
 
-    /**
-     * Customer: fetch own active requests
-     */
     suspend fun fetchMyActiveRequests(): List<Request> = withContext(Dispatchers.IO) {
         val accessToken = Session.accessToken ?: error("Missing access token")
         val customerId = Session.userId ?: error("Not logged in")
@@ -133,9 +124,6 @@ object RequestApi {
         }
     }
 
-    /**
-     * Update request status
-     */
     suspend fun updateRequestStatus(requestId: String, status: String) = withContext(Dispatchers.IO) {
         val accessToken = Session.accessToken ?: error("Missing access token")
 
@@ -159,4 +147,40 @@ object RequestApi {
             error(err ?: "Failed to update request status")
         }
     }
+
+    /**
+     * NEW: Fetch the location (lat, lng) of a request by its ID.
+     * Returns Pair(latitude, longitude) or null if not found.
+     */
+    suspend fun fetchRequestLocation(requestId: String): Pair<Double, Double>? =
+        withContext(Dispatchers.IO) {
+            val accessToken = Session.accessToken ?: error("Missing access token")
+            val encoded = URLEncoder.encode(requestId, "UTF-8")
+            val url = URL(
+                "${AppConfig.SUPABASE_URL}/rest/v1/requests" +
+                        "?id=eq.$encoded" +
+                        "&select=location" +
+                        "&limit=1"
+            )
+
+            val conn = url.openConnection() as HttpURLConnection
+            conn.setRequestProperty("apikey", AppConfig.SUPABASE_ANON_KEY)
+            conn.setRequestProperty("Authorization", "Bearer $accessToken")
+
+            val text = conn.inputStream.bufferedReader().readText()
+            val arr = JSONArray(text)
+            if (arr.length() == 0) return@withContext null
+
+            val locStr = arr.getJSONObject(0).optString("location", null)
+                ?: return@withContext null
+
+            // Parse PostGIS geography string "SRID=4326;POINT(lng lat)"
+            val pointPart = locStr.substringAfter("POINT(").substringBefore(")")
+            val coords = pointPart.split(" ")
+            if (coords.size == 2) {
+                val lng = coords[0].toDouble()
+                val lat = coords[1].toDouble()
+                Pair(lat, lng)   // return as (lat, lng) – GeoPoint expects lat first
+            } else null
+        }
 }

@@ -14,6 +14,7 @@ serve(async (req) => {
       throw new Error("Missing required fields");
     }
 
+    // ✅ FIX: use 'open' (allowed by the table constraint)
     const { data: request, error } = await supabase
       .from("requests")
       .insert({
@@ -21,7 +22,7 @@ serve(async (req) => {
         amount,
         type,
         location: `POINT(${lng} ${lat})`,
-        status: "searching",
+        status: "open",                // ← was "searching", now "open"
         expires_at: new Date(Date.now() + 2 * 60 * 1000)
       })
       .select()
@@ -29,7 +30,7 @@ serve(async (req) => {
 
     if (error) throw error;
 
-    // Trigger matching
+    // Optional: trigger matching (if you want)
     await fetch(`${Deno.env.get("PROJECT_URL")}/functions/v1/match-merchants`, {
       method: "POST",
       headers: {
@@ -45,7 +46,6 @@ serve(async (req) => {
     });
 
     return new Response(JSON.stringify(request), { status: 200 });
-
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), { status: 400 });
   }

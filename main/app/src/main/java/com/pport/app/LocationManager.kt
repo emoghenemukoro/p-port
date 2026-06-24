@@ -12,30 +12,17 @@ class LocationManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun getLocation(onResult: (Location?) -> Unit) {
-        // First, try the cached last known location instantly
-        fusedClient.lastLocation
-            .addOnSuccessListener { lastLoc ->
-                if (lastLoc != null) {
-                    onResult(lastLoc)
-                }
-            }
-            .addOnFailureListener {
-                // ignore, we'll request fresh
-            }
-
-        // Now request a fresh location (this will also trigger the emulator to use the mock point)
+        // Request a single fresh location update – callback fires only once
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000)
             .setMinUpdateIntervalMillis(5000)
-            .setMaxUpdates(1)          // only need one fix
+            .setMaxUpdates(1)
             .build()
 
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { loc ->
-                    onResult(loc)
-                    // stop updates after first good fix
-                    fusedClient.removeLocationUpdates(this)
-                }
+                val loc = result.lastLocation
+                fusedClient.removeLocationUpdates(this)
+                onResult(loc)
             }
 
             override fun onLocationAvailability(availability: LocationAvailability) {

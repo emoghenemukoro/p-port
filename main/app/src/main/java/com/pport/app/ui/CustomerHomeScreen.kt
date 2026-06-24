@@ -7,15 +7,18 @@ import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -34,6 +37,7 @@ import com.pport.app.network.ReviewApi
 import com.pport.app.ui.components.PportTopBar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -97,14 +101,28 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
         activeTransactions = TransactionApi.fetchMyTransactions(listOf("pending", "confirmed_by_customer", "confirmed_by_merchant"))
     }
 
+    // Periodically fetch offers for all requests
     LaunchedEffect(Unit) {
         while (true) {
             refreshRequests()
             refreshTransactions()
+
+            val updatedMap = mutableMapOf<String, List<Offer>>()
+            for (req in requests) {
+                try {
+                    val offers = OfferApi.fetchOffersForRequest(req.id)
+                    updatedMap[req.id] = offers
+                } catch (_: Exception) {
+                    updatedMap[req.id] = offersForRequest[req.id] ?: emptyList()
+                }
+            }
+            offersForRequest = updatedMap
+
             delay(5000)
         }
     }
 
+    // Manually expanded request → refresh immediately
     LaunchedEffect(expandedRequestId) {
         val reqId = expandedRequestId ?: return@LaunchedEffect
         try {
@@ -255,7 +273,6 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
             Text("Request Cash", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(8.dp))
 
-            // Map
             Box(modifier = Modifier.fillMaxWidth().height(250.dp)) {
                 if (currentLocation != null) {
                     MapViewComposable(
@@ -276,10 +293,20 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
-            Row {
-                Button(onClick = { type = "withdraw" }) { Text("Withdraw") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(
+                    selected = type == "withdraw",
+                    onClick = { type = "withdraw" },
+                    label = { Text("Withdraw") },
+                    modifier = Modifier.weight(1f)
+                )
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { type = "deposit" }) { Text("Deposit") }
+                FilterChip(
+                    selected = type == "deposit",
+                    onClick = { type = "deposit" },
+                    label = { Text("Deposit") },
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(Modifier.height(12.dp))
@@ -296,6 +323,7 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
                         return@Button
                     }
                     loading = true
+                    status = "Getting location..."
                     locationManager.getLocation { loc ->
                         if (loc == null) {
                             status = "Location unavailable"
@@ -306,71 +334,88 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
                             try {
                                 RequestApi.createRequestWithLocation(amt, type, loc.latitude, loc.longitude)
                                 status = "Request created"
+                                amount = ""
                             } catch (e: Exception) {
                                 status = "Error: ${e.message}"
                             } finally { loading = false }
                         }
                     }
-                }
-            ) { Text(if (loading) "Processing..." else "Request Cash") }
+                },
+                enabled = !loading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (loading) "Processing..." else "Request Cash")
+            }
 
             Spacer(Modifier.height(12.dp))
             Text(status)
             Divider(Modifier.padding(vertical = 12.dp))
 
-            // My Requests
             Text("My Requests")
             LazyColumn {
                 items(requests) { req ->
                     val isExpanded = expandedRequestId == req.id
                     val offers = offersForRequest[req.id] ?: emptyList()
+                    val hasNewOffer = offers.isNotEmpty() && !isExpanded
+
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(8.dp)
                             .clickable { expandedRequestId = if (isExpanded) null else req.id }
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text("Amount: ${req.amount}")
-                            Text("Type: ${req.type}")
-                            Text("Status: ${req.status}")
-                            if (isExpanded) {
-                                Divider(Modifier.padding(vertical = 4.dp))
-                                if (offers.isEmpty()) {
-                                    Text("No offers yet.")
-                                } else {
-                                    Text("Offers:")
-                                    offers.forEach { offer ->
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Column {
-                                                Text("Markup: ${offer.markupPercent}%")
-                                                Text("Status: ${offer.status}")
-                                            }
-                                            Row {
-                                                TextButton(onClick = {
-                                                    scope.launch {
-                                                        try {
-                                                            val result = TransactionApi.acceptOfferAndCreateTransaction(offer.id)
-                                                            status = "Offer accepted"
-                                                            refreshRequests()
-                                                            refreshTransactions()
-                                                            expandedRequestId = null
-                                                            if (result.paymentLink != null) {
-                                                                openPaymentLink(result.paymentLink)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).padding(12.dp)) {
+                                Text("Amount: ${req.amount}")
+                                Text("Type: ${req.type}")
+                                Text("Status: ${req.status}")
+                                if (isExpanded) {
+                                    Divider(Modifier.padding(vertical = 4.dp))
+                                    if (offers.isEmpty()) {
+                                        Text("No offers yet.")
+                                    } else {
+                                        Text("Offers:")
+                                        offers.forEach { offer ->
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Column {
+                                                    Text("Markup: ${offer.markupPercent}%")
+                                                    Text("Status: ${offer.status}")
+                                                }
+                                                Row {
+                                                    TextButton(onClick = {
+                                                        scope.launch {
+                                                            try {
+                                                                val result = TransactionApi.acceptOfferAndCreateTransaction(offer.id)
+                                                                status = "Offer accepted"
+                                                                refreshRequests()
+                                                                refreshTransactions()
+                                                                expandedRequestId = null
+                                                                if (result.paymentLink != null) {
+                                                                    openPaymentLink(result.paymentLink)
+                                                                }
+                                                            } catch (e: Exception) {
+                                                                status = "Error: ${e.message}"
                                                             }
-                                                        } catch (e: Exception) {
-                                                            status = "Error: ${e.message}"
                                                         }
-                                                    }
-                                                }) { Text("Accept") }
-                                                TextButton(onClick = {
-                                                    counterOfferId = offer.id
-                                                    counterNewMarkup = ""
-                                                    counterDialogOpen = true
-                                                }) { Text("Counter") }
+                                                    }) { Text("Accept") }
+                                                    TextButton(onClick = {
+                                                        counterOfferId = offer.id
+                                                        counterNewMarkup = ""
+                                                        counterDialogOpen = true
+                                                    }) { Text("Counter") }
+                                                }
                                             }
+                                            Divider()
                                         }
-                                        Divider()
                                     }
                                 }
+                            }
+                            if (hasNewOffer) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(end = 12.dp)
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
                             }
                         }
                     }
@@ -424,7 +469,7 @@ fun CustomerHomeScreen(onLogout: () -> Unit) {
     }
 }
 
-// MapViewComposable unchanged
+// Only MapViewComposable here (no SimpleMapView, no MerchantHomeScreen)
 @Composable
 fun MapViewComposable(
     currentLocation: GeoPoint,
@@ -432,6 +477,8 @@ fun MapViewComposable(
     onMerchantClick: (NearbyMerchant) -> Unit
 ) {
     val context = LocalContext.current
+    Configuration.getInstance().userAgentValue = "pport-android"
+
     AndroidView(
         factory = { ctx ->
             MapView(ctx).apply {
@@ -439,6 +486,7 @@ fun MapViewComposable(
                 setMultiTouchControls(true)
                 controller.setZoom(15.0)
                 controller.setCenter(currentLocation)
+
                 val customerMarker = Marker(this)
                 customerMarker.position = currentLocation
                 customerMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)

@@ -22,7 +22,8 @@ data class Transaction(
     val status: String,
     val confirmedCustomer: Boolean,
     val confirmedMerchant: Boolean,
-    val receipt: JSONObject? = null
+    val receipt: JSONObject? = null,
+    val requestType: String? = null   // NEW: "withdraw" or "deposit"
 )
 
 data class AcceptOfferResult(
@@ -32,10 +33,6 @@ data class AcceptOfferResult(
 
 object TransactionApi {
 
-    /**
-     * Accept an offer AND create a transaction row via the `accept-offer` edge function.
-     * For withdrawals, the edge function returns a payment link.
-     */
     suspend fun acceptOfferAndCreateTransaction(offerId: String): AcceptOfferResult =
         withContext(Dispatchers.IO) {
             val token = Session.accessToken ?: error("Missing token")
@@ -75,9 +72,6 @@ object TransactionApi {
             AcceptOfferResult(transaction, paymentLink)
         }
 
-    /**
-     * Fetch all transactions where the current user is customer or merchant, filtered by status list.
-     */
     suspend fun fetchMyTransactions(statuses: List<String>): List<Transaction> =
         withContext(Dispatchers.IO) {
             val token = Session.accessToken ?: error("Missing token")
@@ -85,12 +79,13 @@ object TransactionApi {
             val encoded = URLEncoder.encode(userId, "UTF-8")
             val inList = statuses.joinToString(",")
 
+            // Include request(type) via join
             val url = URL("${AppConfig.SUPABASE_URL}/rest/v1/transactions" +
                     "?or=(customer_id.eq.$encoded,merchant_id.eq.$encoded)" +
                     "&status=in.($inList)" +
                     "&order=created_at.desc" +
                     "&limit=50" +
-                    "&select=id,request_id,offer_id,customer_id,merchant_id,base_amount,markup,total_amount,status,confirmed_customer,confirmed_merchant,receipt")
+                    "&select=id,request_id,offer_id,customer_id,merchant_id,base_amount,markup,total_amount,status,confirmed_customer,confirmed_merchant,receipt,request:requests(type)")
 
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -103,10 +98,6 @@ object TransactionApi {
             List(arr.length()) { i -> parseTransaction(arr.getJSONObject(i)) }
         }
 
-    /**
-     * Confirm a transaction as a customer or merchant.
-     * Calls the `confirm-transaction` edge function.
-     */
     suspend fun confirmTransaction(transactionId: String, role: String): Transaction =
         withContext(Dispatchers.IO) {
             val token = Session.accessToken ?: error("Missing token")
@@ -137,15 +128,12 @@ object TransactionApi {
             parseTransaction(json)
         }
 
-    /**
-     * Fetch a single transaction by ID.
-     */
     suspend fun fetchTransaction(transactionId: String): Transaction =
         withContext(Dispatchers.IO) {
             val token = Session.accessToken ?: error("Missing token")
             val url = URL("${AppConfig.SUPABASE_URL}/rest/v1/transactions" +
                     "?id=eq.$transactionId" +
-                    "&select=id,request_id,offer_id,customer_id,merchant_id,base_amount,markup,total_amount,status,confirmed_customer,confirmed_merchant,receipt")
+                    "&select=id,request_id,offer_id,customer_id,merchant_id,base_amount,markup,total_amount,status,confirmed_customer,confirmed_merchant,receipt,request:requests(type)")
 
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -159,18 +147,60 @@ object TransactionApi {
             parseTransaction(arr.getJSONObject(0))
         }
 
-    private fun parseTransaction(obj: JSONObject): Transaction = Transaction(
-        id = obj.getString("id"),
-        requestId = obj.getString("request_id"),
-        offerId = obj.getString("offer_id"),
-        customerId = obj.getString("customer_id"),
-        merchantId = obj.getString("merchant_id"),
-        baseAmount = obj.getDouble("base_amount"),
-        markup = obj.getDouble("markup"),
-        totalAmount = obj.getDouble("total_amount"),
-        status = obj.getString("status"),
-        confirmedCustomer = obj.optBoolean("confirmed_customer"),
-        confirmedMerchant = obj.optBoolean("confirmed_merchant"),
-        receipt = obj.optJSONObject("receipt")
-    )
+    suspend fun initiateDepositTransfer(
+        transactionId: String,
+        customerAccountDetails: JSONObject?
+    ): Double = withContext(Dispatchers.IO) {
+        val token = Session.accessToken ?: error("Missing token")
+
+        val url = URL("${AppConfig.SUPABASE_URL}/functions/v1/merchant-deposit-transfer")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/json")
+        }
+
+        val body = JSONObject().apply {
+            put("transaction_id", transactionId)
+            if (customerAccountDetails != null) put("customer_account_details", customerAccountDetails)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+        val code = conn.responseCode
+        val responseText = if (code in 200..299) {
+            conn.inputStream.bufferedReader().readText()
+        } else {
+            val err = conn.errorStream?.bufferedReader()?.readText()
+            error(err ?: "Deposit transfer failed (HTTP $code)")
+        }
+
+        val json = JSONObject(responseText)
+        if (!json.optBoolean("success")) {
+            error(json.optString("error", "Transfer failed"))
+        }
+        json.getDouble("new_balance")
+    }
+
+    private fun parseTransaction(obj: JSONObject): Transaction {
+        val requestObj = obj.optJSONObject("request")
+        val requestType = requestObj?.optString("type", null)
+
+        return Transaction(
+            id = obj.getString("id"),
+            requestId = obj.getString("request_id"),
+            offerId = obj.getString("offer_id"),
+            customerId = obj.getString("customer_id"),
+            merchantId = obj.getString("merchant_id"),
+            baseAmount = obj.getDouble("base_amount"),
+            markup = obj.getDouble("markup"),
+            totalAmount = obj.getDouble("total_amount"),
+            status = obj.getString("status"),
+            confirmedCustomer = obj.optBoolean("confirmed_customer"),
+            confirmedMerchant = obj.optBoolean("confirmed_merchant"),
+            receipt = obj.optJSONObject("receipt"),
+            requestType = requestType
+        )
+    }
 }
